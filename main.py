@@ -11,8 +11,10 @@ close, and use the low of the five bars ending at each sample.
   - exit: close below that trailing reference, or 3% under cost;
   - at most MAX_ENTRIES entries over the whole window.
 
-Slice 5 built and checked the sampler with no orders.  Slice 6 adds the
-entry/hold rules; slice 7 tunes them on the dev window.  The vendored shim
+Slice 5 built and checked the sampler with no orders.  Slice 6 added the
+entry/hold rules.  Slice 7 tuned them on the dev window and chose the centre
+of a positive plateau: breakout 12 samples (60 minutes), trailing reference
+8 samples (40 minutes), hard stop 3%, at most 3 entries.  The vendored shim
 is a byte-for-byte copy of the kit SDK and owns the wire, the fills and the
 final flatten.
 """
@@ -26,7 +28,7 @@ import makefun_bars
 SYMBOL = "CBBTC"
 SAMPLE_EVERY = 5
 BREAKOUT_BARS = 12
-TRAIL_BARS = 6
+TRAIL_BARS = 8
 MAX_ENTRIES = 3
 STAKE_PERCENT = 90
 HARD_STOP_RATIO = 97
