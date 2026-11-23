@@ -1,20 +1,20 @@
 """Slow Donchian breakout bot for the cbBTC/USDC bars-replay race.
 
-Pivot from the EMA-cross version, which paid 10 round trips of ~26 bps in a
-market whose median one-minute move is 2.76 bps.  This bot samples every
-fifth one-minute close, so every indicator lives on a 5-minute clock:
+Pivot: replace the EMA-cross version with a slow Donchian breakout hold.
+Every indicator lives on a 5-minute clock: sample every fifth one-minute
+close, and use the low of the five bars ending at each sample.
 
   - entry: the sampled close breaks above the highest of the previous
-    BREAKOUT_BARS sampled closes (a simple Donchian breakout confirmation);
+    BREAKOUT_BARS sampled closes (a simple breakout confirmation);
   - hold: while the close stays above a trailing reference, the lowest low
     of the last TRAIL_BARS samples, ratcheted upward only;
   - exit: close below that trailing reference, or 3% under cost;
   - at most MAX_ENTRIES entries over the whole window.
 
-Slice 5 builds and checks the sampled indicators with no orders.  Slice 6
-adds the entry/hold rules; slice 7 tunes them on the dev window.  The
-vendored shim is a byte-for-byte copy of the kit SDK and owns the wire, the
-fills and the final flatten.
+Slice 5 built and checked the sampler with no orders.  Slice 6 adds the
+entry/hold rules; slice 7 tunes them on the dev window.  The vendored shim
+is a byte-for-byte copy of the kit SDK and owns the wire, the fills and the
+final flatten.
 """
 
 import os
@@ -83,15 +83,56 @@ _series = {}
 
 
 def on_batch(state, batch):
-    """Fold the batch's bars; slice 5 sends no orders."""
-    for bar in batch["bars"]:
-        symbol = bar["symbol"]
-        s = _series.get(symbol)
-        if s is None:
-            s = _series[symbol] = Series()
+    """Fold this batch's bars, then decide at most one order."""
+    symbol = SYMBOL
+    s = _series.get(symbol)
+    if s is not None:
         s.fresh = False
-        push(s, bar)
-    return []
+    for bar in batch["bars"]:
+        sym = bar["symbol"]
+        series = _series.get(sym)
+        if series is None:
+            series = _series[sym] = Series()
+        push(series, bar)
+    if state.warming_up:
+        return []
+    s = _series.get(symbol)
+    if s is None:
+        return []
+
+    close = state.close(symbol)
+    held = state.positions.get(symbol)
+    if held is not None:
+        s.pending = False
+        if close is None:
+            return []
+        if s.fresh and s.trail_candidate is not None:
+            if s.trail is None or s.trail_candidate > s.trail:
+                s.trail = s.trail_candidate
+        value = state.value(symbol, held.qty)
+        hard_hit = value * 100 <= held.cost * HARD_STOP_RATIO
+        break_hit = s.trail is not None and close < s.trail
+        if hard_hit or break_hit:
+            s.trail = None
+            return [{"side": "sell", "symbol": symbol, "qty": held.qty,
+                     "max_slippage_bps": MAX_SLIPPAGE_BPS}]
+        return []
+
+    s.trail = None
+    if s.pending or not s.fresh or not s.breakout or s.entries >= MAX_ENTRIES:
+        return []
+    stake = state.cash * STAKE_PERCENT // 100
+    room = state.weight_room(symbol)
+    if stake > room:
+        stake = room
+    minimum = int(state.hello["fees"]["min_notional_quote_units"])
+    if stake < minimum:
+        return []
+    s.entries += 1
+    s.pending = True
+    s.trail = s.trail_candidate
+    return [{"side": "buy", "symbol": symbol, "notional_quote_units": stake,
+             "max_slippage_bps": MAX_SLIPPAGE_BPS}]
 
 
 if __name__ == "__main__":
